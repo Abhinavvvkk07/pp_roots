@@ -1,45 +1,48 @@
-from pathlib import Path
+import json
 import coremltools as ct
 import xgboost as xgb
+from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent
-MODELS = ROOT / "models"
+# ---- Paths ----
+ROOT = Path(__file__).resolve().parents[1]
+MODEL_PATH = ROOT / "models" / "purchase_predictor.json"
+META_PATH = ROOT / "models" / "purchase_predictor_meta.json"
+OUTPUT_PATH = ROOT / "models" / "PurchasePredictor.mlmodel"
 
-XGB_JSON = MODELS / "purchase_predictor.json"
-OUT_MLMODEL = MODELS / "PurchasePredictor.mlmodel"
+# ---- Load metadata ----
+with open(META_PATH) as f:
+    meta = json.load(f)
 
-print("=== convert.py starting ===")
-print("ROOT:", ROOT)
-print("MODELS:", MODELS)
-print("Looking for:", XGB_JSON)
+feature_names = meta["feature_names"]
+print(f"Features: {feature_names}")
 
-if not XGB_JSON.exists():
-    raise FileNotFoundError(f"Missing model file: {XGB_JSON}")
+# ---- Load the trained XGBoost booster ----
+booster = xgb.Booster()
+booster.load_model(str(MODEL_PATH))
+print("Loaded XGBoost model")
 
-# Load model
-model = xgb.XGBClassifier()
-model.load_model(str(XGB_JSON))
-print("Loaded XGBoost model OK")
-
-print("Attempting CoreML conversion...")
-
+# ---- Convert to CoreML ----
 coreml_model = ct.converters.xgboost.convert(
-    model,
+    booster,
+    feature_names=feature_names,
+    target="purchase_occurred",
+    force_32bit_float=True,
     mode="classifier",
     class_labels=[0, 1],
-    input_features=[
-        ("distance_to_merchant", "Double"),
-        ("hour_of_day", "Double"),
-        ("is_weekend", "Double"),
-        ("budget_utilization", "Double"),
-        ("merchant_regret_rate", "Double"),
-        ("dwell_time", "Double"),
-    ],
 )
 
-print("Conversion succeeded. Saving to:", OUT_MLMODEL)
-coreml_model.save(str(OUT_MLMODEL))
+# ---- Add model metadata (visible in Xcode) ----
+coreml_model.author = "Purchase Predictor"
+coreml_model.short_description = (
+    "Predicts whether a user will make a purchase based on contextual signals."
+)
+coreml_model.input_description["distance_to_merchant"] = "Distance to merchant in meters"
+coreml_model.input_description["hour_of_day"] = "Hour of the day (0-23)"
+coreml_model.input_description["is_weekend"] = "Whether it is a weekend (0 or 1)"
+coreml_model.input_description["budget_utilization"] = "Budget utilization ratio (0.0-1.0)"
+coreml_model.input_description["merchant_regret_rate"] = "Merchant regret rate (0.0-1.0)"
+coreml_model.input_description["dwell_time"] = "Dwell time in seconds"
 
-print("Saved:", OUT_MLMODEL)
-print("=== convert.py done ===")
+# ---- Save ----
+coreml_model.save(str(OUTPUT_PATH))
+print(f"\n✅ Converted to CoreML: {OUTPUT_PATH}")
